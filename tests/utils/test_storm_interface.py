@@ -16,6 +16,7 @@ from aalpy_extra.utils.storm_interface import (
     stormpy_model_check,
     stormpy_model_check_properties,
     stormpy_model_check_experiment,
+    stormpy_policy,
 )
 
 
@@ -153,3 +154,38 @@ class TestStormpyModelCheckExperiment:
         assert "results" in out
         assert "diff_to_correct" in out
         assert out["diff_to_correct"]["prop1"] == 0.0
+
+
+class TestStormpyPolicy:
+    """Tests for policy generation (bounded and unbounded reachability)."""
+
+    @staticmethod
+    def _mdp():
+        """``a`` in s0 reaches goal w.p. 0.3 (else stays), ``b`` leads via mid (one step more) to goal w.p. 1."""
+        s0, goal, mid, dead = MdpState("s0", "start"), MdpState("goal", "goal"), MdpState("mid", "mid"), \
+            MdpState("dead", "dead")
+        s0.transitions["a"] += [(goal, 0.3), (s0, 0.7)]
+        s0.transitions["b"].append((mid, 1.0))
+        s0.transitions["c"].append((dead, 1.0))  # deadlock state without outgoing transitions
+        mid.transitions["a"].append((goal, 1.0))
+        return Mdp(s0, [s0, goal, mid, dead]), s0, mid
+
+    def test_values(self):
+        """Step bounds are respected: `goal` needs at least 2 steps via `a`, and 3 via `b`."""
+        mdp, _, _ = self._mdp()
+        for bound, expected in [(1, 0.0), (2, 0.3), (3, 1.0), (None, 1.0)]:
+            value, _ = stormpy_policy(mdp, "goal", bound)
+            assert value == pytest.approx(expected)
+
+    def test_bounded_policy_depends_on_bound(self):
+        mdp, s0, mid = self._mdp()
+        _, policy = stormpy_policy(mdp, "goal", 2)
+        assert policy(s0, 0) == "a"
+        _, policy = stormpy_policy(mdp, "goal", 3)
+        assert policy(s0, 0) == "b"
+        assert policy(mid, 1) == "a"
+
+    def test_unbounded_policy_ignores_steps(self):
+        mdp, s0, _ = self._mdp()
+        _, policy = stormpy_policy(mdp, "goal")
+        assert policy(s0, 0) == policy(s0, 100) is not None

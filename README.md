@@ -88,6 +88,8 @@ probabilistic model checking on AALpy MDPs and SMMs:
 - `smm_to_stormpy_mdp(smm)` — Convert a Stochastic Mealy Machine to a stormpy MDP
 - `stormpy_model_check(model, property_string)` — Check a single property
 - `stormpy_model_check_properties(model, properties)` — Batch model checking
+- `stormpy_policy(mdp, target, step_bound=None)` — Maximal reachability probability of an output label and a
+  memoryless `Policy` achieving it (`policy(state, steps)` returns the input to execute); step-bounded or unbounded
 
 #### Quick Start 
 
@@ -120,6 +122,24 @@ For syntax of the PRISM language and properties,
 please refer to the documentation of [Storm](https://www.stormchecker.org/)
 and [PRISM](https://www.prismmodelchecker.org/).
 
+### Policy-guided Active Alergia (`aalpy_extra.learning_algs.stochastic_passive`)
+
+`ReachabilityPolicySampler` implements the property-directed sampling of
+[Probabilistic Black-Box Reachability Checking](https://doi.org/10.1007/s10703-019-00333-0) (Aichernig and Tappler)
+as a `Sampler` for AALpy's `run_active_Alergia`: in each round, a policy maximising the probability of reaching a
+target output is computed with Storm on the current hypothesis and used to sample new traces from the SUL.
+
+```python
+from aalpy.learning_algs import run_active_Alergia
+from aalpy_extra.learning_algs.stochastic_passive.ProbBlackBoxChecking import ReachabilityPolicySampler
+from aalpy_extra.utils.storm_interface import stormpy_policy
+
+sampler = ReachabilityPolicySampler(input_alphabet, "crash", step_bound=11, num_traces=300)
+data = sampler.sample(sul, None)  # initial, uniformly random traces
+model = run_active_Alergia(data, sul, sampler, n_iter=10)
+probability, policy = stormpy_policy(model, "crash", step_bound=11)
+```
+or using `run_probabilistic_black_box_reach_checking` directly.
 ## Documentation
 
 - [AALpy documentation](https://github.com/DES-Lab/AALpy) — the base library

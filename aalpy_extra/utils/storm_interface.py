@@ -19,9 +19,10 @@ Note:
         pip install aalpy-extra[stormpy]
 """
 
+import json
 import os
 import tempfile
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 from aalpy.automata import Mdp, StochasticMealyMachine
 
@@ -49,7 +50,7 @@ def _get_stormpy():
 # Model conversion
 # ---------------------------------------------------------------------------
 
-def mdp_to_stormpy(mdp: Mdp) -> "stormpy.storage.SparseMdp":
+def mdp_to_stormpy(mdp: Mdp, step_bound: Optional[int] = None) -> "stormpy.storage.SparseMdp":
     """Convert an AALpy MDP to a stormpy SparseMdp model.
 
     The conversion is performed by first translating the AALpy MDP to a
@@ -60,6 +61,11 @@ def mdp_to_stormpy(mdp: Mdp) -> "stormpy.storage.SparseMdp":
 
     Args:
         mdp: AALpy Markov Decision Process.
+        step_bound: If given, a step counter ``steps`` (saturating at
+            ``step_bound``) and the label ``"in_bound"`` (``steps < step_bound``)
+            are added. Step-bounded reachability ``F<k psi`` then becomes the
+            unbounded property ``F (psi & "in_bound")``, for which memoryless
+            policies suffice.
 
     Returns:
         stormpy.storage.SparseMdp: Equivalent stormpy model.
@@ -70,8 +76,15 @@ def mdp_to_stormpy(mdp: Mdp) -> "stormpy.storage.SparseMdp":
     sp = _get_stormpy()
 
     from aalpy.utils import mdp_2_prism_format
+    from aalpy.utils.ModelChecking import _sanitize_for_prism
 
     prism_str = mdp_2_prism_format(mdp, name="auto_mdp", output_path=None)
+    if step_bound is not None:
+        # Synchronises on all inputs; inputs without transitions must be skipped, as they would not synchronise.
+        inputs = {_sanitize_for_prism(i) for s in mdp.states for i, t in s.transitions.items() if t}
+        prism_str += f"module step_counter\n steps : [0..{step_bound}] init 0;\n"
+        prism_str += "".join(f" [{i}] true -> (steps'=min(steps+1,{step_bound}));\n" for i in inputs)
+        prism_str += f'endmodule\nlabel "in_bound" = steps<{step_bound};\n'
 
     # Write PRISM model to a temporary file (stormpy's parser reads files)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".prism", prefix="aalpy_extra_")
@@ -187,6 +200,65 @@ def stormpy_model_check_properties(
         results[f"prop{i + 1}"] = result.at(model.initial_states[0])
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Policy generation
+# ---------------------------------------------------------------------------
+
+class Policy:
+    """Memoryless deterministic policy, optionally depending on the number of steps taken (step-bounded case, which
+    requires the underlying MDP to be extended).
+
+    Args:
+        choices: Maps ``(state_id, steps)`` to the input to execute (``steps`` is 0 if unbounded).
+        step_bound: Step bound the policy was computed for, ``None`` if unbounded.
+    """
+
+    def __init__(self, choices: Dict[Tuple, object], step_bound: Optional[int] = None):
+        self.choices = choices
+        self.step_bound = step_bound
+
+    def __call__(self, state, steps: int = 0):
+        """Return the input to execute in MDP state ``state`` after ``steps`` steps, or ``None`` if undefined."""
+        steps = 0 if self.step_bound is None else min(steps, self.step_bound)
+        return self.choices.get((state.state_id, steps))
+
+
+def stormpy_policy(mdp: Mdp, target: str, step_bound: Optional[int] = None) -> Tuple[float, Policy]:
+    """Compute a policy maximising the probability of reaching a target label.
+
+    Args:
+        mdp: AALpy MDP.
+        target: Label (output) of the states to reach.
+        step_bound: If given, maximise the probability of reaching ``target`` in less than ``step_bound``
+            steps (``Pmax=? [F<step_bound "target"]``); otherwise unbounded reachability is used.
+
+    Returns:
+        The maximal reachability probability and a :class:`Policy` achieving it.
+
+    Raises:
+        ImportError: If stormpy is not installed.
+    """
+    sp = _get_stormpy()
+    from aalpy.utils.ModelChecking import _sanitize_for_prism
+
+    model = mdp_to_stormpy(mdp, step_bound)
+    psi = f'"{target}"' if step_bound is None else f'"{target}" & "in_bound"'
+    prop = sp.parse_properties_without_context(f"Pmax=? [F ({psi})]")[0]
+    result = sp.model_checking(model, prop, extract_scheduler=True)
+
+    inputs = {_sanitize_for_prism(i): i for s in mdp.states for i in s.transitions}
+    choices = {}
+    for state in model.states:
+        choice = result.scheduler.get_choice(state.id)
+        if choice.defined:
+            choice_index = model.get_choice_index(state.id, choice.get_deterministic_choice())
+            labels = model.choice_labeling.get_labels_of_choice(choice_index)
+            if labels:  # no label for the self-loop Storm adds to deadlock states
+                valuation = json.loads(str(model.state_valuations.get_json(state.id)))
+                choices[(mdp.states[valuation["loc"]].state_id, valuation.get("steps", 0))] = inputs[next(iter(labels))]
+    return result.at(model.initial_states[0]), Policy(choices, step_bound)
 
 
 # ---------------------------------------------------------------------------
