@@ -140,6 +140,39 @@ model = run_active_Alergia(data, sul, sampler, n_iter=10)
 probability, policy = stormpy_policy(model, "crash", step_bound=11)
 ```
 or using `run_probabilistic_black_box_reach_checking` directly.
+
+### L#-square: Learning from Incomplete Teachers (`aalpy_extra.learning_algs.incomplete_teacher`)
+
+`run_lsharp_square` learns a small DFA from a teacher that does not know the answer to every query, i.e., that may
+answer *don't care* (DC), for example when the only information is a finite set of classified words.
+Answers are stored in an observation tree, and a SAT solver ([CaDiCaL](https://github.com/arminbiere/cadical) via
+`python-sat`) searches for a DFA consistent with all known answers. A (finite-data) equivalence oracle checks each
+hypothesis, and its counterexamples are added to the tree.
+It requires `python-sat` (see [With SAT-Based Learning](#with-sat-based-learning)).
+
+```python
+import itertools
+
+from aalpy_extra.SULs.IncompleteSUL import IncompleteSUL
+from aalpy_extra.oracles.FiniteDataOracle import FiniteDataOracle
+from aalpy_extra.learning_algs.incomplete_teacher.LSharpSquare import run_lsharp_square
+
+alphabet = ["a", "b"]
+# known: words of length <= 3, accepted iff they contain an even number of a's; all other words are don't care
+data = [(word, word.count("a") % 2 == 0) for n in range(4) for word in itertools.product(alphabet, repeat=n)]
+sul = IncompleteSUL(data)
+dfa = run_lsharp_square(alphabet, sul, FiniteDataOracle(alphabet, sul, data))  # a DFA with 2 states
+```
+
+See `python Examples.py lsharp_square` for a complete example.
+
+The algorithm (called L#<sub>□</sub> there) was proposed by Jasper Laumen, Leonne Snel, and Frits Vaandrager in
+[An L# Based Algorithm for Active Learning of Minimal Separating Automata](https://doi.org/10.1007/978-3-032-32526-6_13)
+(CAV 2026; [extended version](https://arxiv.org/abs/2605.15294)), where it is inspired by L# and set in the incomplete-teacher
+setting of [Moeller et al.](https://doi.org/10.4230/LIPIcs.ECOOP.2023.21). The implementation was contributed by
+Jasper Laumen. In contrast to the original implementation of the paper, which uses the SMT solver Z3, this one
+encodes hypothesis construction as an incremental SAT problem.
+
 ## Documentation
 
 - [AALpy documentation](https://github.com/DES-Lab/AALpy) — the base library
@@ -165,8 +198,8 @@ library:
 - [Extended version (preferred)](https://www.researchgate.net/publication/359517046_AALpy_an_active_automata_learning_library/citation/download)
 - [Tool paper](https://dblp.org/rec/conf/atva/MuskardinAPPT21.html?view=bibtex)
 
-Additionally, in case you use one of the available extensions, please check the documentation 
-for reference to a potentially published paper.
+Additionally, in case you use one of the available extensions, please also cite the corresponding publication,
+see [CITING.md](CITING.md).
 
 
 ## License
